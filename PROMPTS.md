@@ -1,26 +1,42 @@
 # AI Prompts Used
 
-This document catalogs all AI prompts used in **cf-ai**, as required by the Cloudflare assignment guidelines. Prompts are kept in sync with the source files listed below; if you change code, update this file too.
+This document is the **canonical catalog** of prompts and related text that feed **Workers AI**, **Pages Functions**, or **optional external Workers**, plus UI copy that shapes what users send. **If you change the code, update this file** so it stays accurate.
+
+| Source file | What it defines |
+|-------------|-----------------|
+| `functions/api/parse-resume.ts` | Resume parsing system prompt; user message = raw resume text |
+| `functions/api/generate.ts` | Website generation system prompt; user message = style + JSON resume |
+| `functions/api/chat.ts` | Chat / iteration system prompt; system extended with full HTML; history + user turns |
+| `src/templates/index.ts` | Per-template `stylePrompt` (and UI `name` / `description`) |
+| `src/components/ChatInterface.tsx` | Chat suggestions; image-upload message template; placeholders; error strings |
+| `src/components/TemplateGallery.tsx` | External Worker `input` payload shape; loading / page copy |
+| `src/config/externalWorker.ts` | Default external Worker URL; env overrides |
 
 ---
 
-## Development Prompts (Cursor AI)
+## Model and parameters (Workers AI)
 
-### Initial Project Scaffold (cf-ai)
+**Model (all three Pages Function endpoints):** `@cf/meta/llama-3.3-70b-instruct-fp8-fast`
+
+| Endpoint | `max_tokens` |
+|----------|----------------|
+| `POST /api/parse-resume` | `2048` |
+| `POST /api/generate` | `8192` |
+| `POST /api/chat` | `8192` |
+
+---
+
+## Development prompts (Cursor AI)
+
+### Initial project scaffold (cf-ai)
 
 > I want a webapp that will accept a users resume, give the user example templates or allow the user to make their own templates to turn their resume into a website that can display their projects personal accounts or whatever else they want on their website. We will use a Cloudflare worker AI to help build the website and iterate with the client. Please build the framework and we can iterate from there.
 
 ---
 
-## Application Prompts (Runtime — Workers AI / Llama 3.3)
+## 1. Resume parsing (`functions/api/parse-resume.ts`)
 
-**Model used:** `@cf/meta/llama-3.3-70b-instruct-fp8-fast` (Pages Functions).
-
----
-
-### 1. Resume Parsing — System Prompt (`functions/api/parse-resume.ts`)
-
-**User message:** Raw resume text from the client.
+### System prompt
 
 ```
 You are a resume parser. Extract structured data from the provided resume text and return ONLY valid JSON with no additional text or markdown formatting.
@@ -72,23 +88,15 @@ Use this exact structure:
 If a field is not found in the resume, use an empty string or empty array as appropriate. Return ONLY the JSON object.
 ```
 
-**Purpose:** Extract structured resume data from free-form text for the generate step.
+### User message
+
+The request body field `resumeText` (trimmed for validation; full string sent to the model).
 
 ---
 
-### 2. Website Generation — System Prompt (`functions/api/generate.ts`)
+## 2. Website generation (`functions/api/generate.ts`)
 
-**User message template (constructed in code):**
-
-```
-STYLE GUIDELINES:
-{stylePrompt from selected template}
-
-RESUME DATA:
-{JSON.stringify(resumeData, null, 2)}
-```
-
-**System prompt:**
+### System prompt
 
 ```
 You are an award-winning web designer and front-end developer. You build portfolio websites that look so good they could win design awards. Generate a COMPLETE, self-contained HTML document.
@@ -135,15 +143,25 @@ SECTIONS (only if data exists):
 9. Footer
 ```
 
-**Purpose:** Produce a single-file HTML portfolio from structured resume data plus the chosen template’s style guidelines.
+### User message (template)
+
+Built in code as:
+
+```
+STYLE GUIDELINES:
+{body.stylePrompt}
+
+RESUME DATA:
+{JSON.stringify(body.resumeData, null, 2)}
+```
+
+`stylePrompt` comes from the selected template’s `stylePrompt` in `src/templates/index.ts`.
 
 ---
 
-### 3. Chat / Iteration — System Prompt (`functions/api/chat.ts`)
+## 3. Chat / iteration (`functions/api/chat.ts`)
 
-The runtime builds: `SYSTEM_PROMPT` + `\n\nCURRENT WEBSITE HTML:\n` + full current HTML.
-
-**User messages:** Normal text, or (from the React client when uploading an image) a line containing `[IMAGE_DATA_URL]: ` followed by a base64 data URL.
+### Base system prompt
 
 ```
 You are an expert web developer assistant helping a user customize their portfolio website through natural conversation.
@@ -180,15 +198,81 @@ WHEN THE USER ASKS FOR DESIGN CHANGES:
 - Suggest related improvements (e.g., "I changed the colors — want me to also update the hover effects to match?")
 ```
 
-**Purpose:** Iterative edits to the generated site via chat; supports image injection into `data-img-slot` placeholders.
+### Actual system message sent to the model
+
+```
+${SYSTEM_PROMPT}
+
+CURRENT WEBSITE HTML:
+${body.currentHtml}
+```
+
+### Conversation layout
+
+1. **System:** the string above (base prompt + current HTML).
+2. **History:** up to the **last 6** entries from `chatHistory` (`role` + `content` preserved).
+3. **User:** the new `message` from the request body.
+
+### Parsing the assistant reply (server-side fallbacks)
+
+If the model output contains `---HTML---`, the handler splits on that marker and strips `EXPLANATION:` from the explanation part. Otherwise:
+
+- If HTML is detected with `<!DOCTYPE html...`, explanation defaults to:  
+  `I've updated your website with the requested changes.`
+- If no HTML is found, the raw model `content` is returned as `explanation` (conversational reply).
 
 ---
 
-### 4. Template Style Prompts (`src/templates/index.ts`)
+## 4. Image upload user message (`ChatInterface.tsx`)
 
-These strings are interpolated into the generate **user** message under `STYLE GUIDELINES:`.
+When the user picks an image file, the client sends a **user** message (not a separate system prompt) shaped like:
 
-#### 4a. Modern Dark (`id: modern-dark`)
+```
+Here is an image I want to add to my website. {slotHint}
+
+[IMAGE_DATA_URL]: {dataUrl}
+```
+
+- `slotHint` = trimmed textarea text if any, otherwise:  
+  `Use this image where it fits best (profile photo or a project)`
+- `dataUrl` = full base64 data URL from `FileReader.readAsDataURL`.
+
+The chat UI shows a short label to the user: `📷 Image uploaded: {slotHint}` (the data URL is not shown in the bubble).
+
+---
+
+## 5. External generate Worker (fallback, not in this repo)
+
+**Default URL** (`src/config/externalWorker.ts`): `https://cf-ai.weasol51.workers.dev`  
+Override with `VITE_CF_AI_WORKER_URL`; disable fallback with `VITE_USE_PAGES_GENERATE_ONLY=true`.
+
+**HTTP:** `POST` JSON `{ "input": string }` → expected `{ "html": string }` (see `TemplateGallery.tsx`).
+
+### `input` string construction (`TemplateGallery.tsx`)
+
+When Pages `/api/generate` fails and the external Worker is used, `input` is:
+
+```text
+{resumeText or JSON.stringify(resumeData, null, 2)}
+
+Selected template style (follow closely):
+{template.stylePrompt}
+```
+
+(i.e. four segments joined with `\n`: resume text or resume JSON, blank line, the line `Selected template style (follow closely):`, then the template’s `stylePrompt`.)
+
+The Worker implementation is maintained separately; align its system/user prompts with **§2** above, treating the bundled `input` as the user-facing instruction plus resume content.
+
+---
+
+## 6. Template style prompts (`src/templates/index.ts`)
+
+These are sent as **`stylePrompt`** in the generate user message (§2). Each entry also has UI **`name`** and **`description`**.
+
+### 6a. `modern-dark`
+
+- **name:** Modern Dark  
+- **description:** Sleek dark theme with gradient accents, smooth animations, and a bold hero section.
 
 ```
 Design a premium dark-themed portfolio. Be creative — this should feel like a high-end product landing page, not a boring resume.
@@ -206,7 +290,10 @@ LAYOUT IDEAS (pick what fits the person's data):
 VISUAL FLAIR: Subtle particle/dot background pattern using CSS radial-gradient. Glassmorphism effects on cards (backdrop-filter: blur). Animated underlines on navigation. Orange glow effects on hover states.
 ```
 
-#### 4b. Clean Minimal (`id: clean-minimal`)
+### 6b. `clean-minimal`
+
+- **name:** Clean Minimal  
+- **description:** Light and airy with elegant typography, generous whitespace, and refined details.
 
 ```
 Design an elegantly minimal portfolio. Think high-end design agency or editorial magazine layout. Every pixel of whitespace is intentional.
@@ -222,7 +309,10 @@ LAYOUT: Max-width 720px centered. Generous vertical rhythm (4rem+ between sectio
 THE FEEL: Like reading a beautifully typeset book. No shadows except maybe one very subtle one. Thin hairline borders. Elegant transitions on hover (opacity, not movement).
 ```
 
-#### 4c. Bold Creative (`id: bold-creative`)
+### 6c. `bold-creative`
+
+- **name:** Bold Creative  
+- **description:** Vibrant colors, dynamic layouts, and eye-catching designs bursting with personality.
 
 ```
 Design a bold, energetic, creative portfolio that screams personality. This should feel fun and memorable — like the person behind it is someone you want to meet.
@@ -242,7 +332,10 @@ EXPERIENCE: Cards with thick left borders in alternating colors. Maybe a zigzag 
 DECORATIVE: CSS-only decorative elements — circles, dots, squiggly lines (using border-radius and transforms). Animated gradient buttons. Fun cursor effects.
 ```
 
-#### 4d. Developer Terminal (`id: developer`)
+### 6d. `developer`
+
+- **name:** Developer Terminal  
+- **description:** Terminal-inspired design with monospace fonts, code aesthetics, and hacker vibes.
 
 ```
 Design a developer terminal-themed portfolio that looks like a beautifully styled terminal/IDE. This should feel authentic to developer culture, not gimmicky.
@@ -266,12 +359,61 @@ VISUAL FLAIR: Subtle CRT scanline overlay using repeating-linear-gradient. A fai
 
 ---
 
-## Optional: External Worker (`cf-ai.weasol51.workers.dev`)
+## 7. UI copy (not Workers AI system prompts)
 
-That Worker is **not** in this repository. If you maintain it separately, copy the generation system prompt from **§2** above and change rule 1 to reference **the user's input text** instead of **RESUME DATA**, and keep the JSON response shape `{ "html": "..." }` expected by `TemplateGallery.tsx` fallback.
+These strings influence what users type or see; they are **not** the `system` role in Workers AI unless noted.
+
+### Chat quick suggestions (`SUGGESTIONS` in `ChatInterface.tsx`)
+
+- `Make the design more creative and unique`
+- `Change the color scheme to blue and teal`
+- `Make the hero section more impactful`
+- `Add hover animations to all cards`
+- `Upload a profile photo`
+- `Redesign the skills section to look more visual`
+
+### Chat panel (`ChatInterface.tsx`)
+
+- Header title: `AI Assistant`
+- Subtitle: `Describe changes to your website`
+- Empty state: `Tell me how you'd like to customize your website.`
+- Textarea placeholder: `Describe a change or type where to place an image...`
+- Image button `title`: `Upload an image (profile photo, project screenshot, etc.)`
+- On success (generic): `Done! Check the preview.`
+- On success after image: `Image added! Check the preview.`
+- On send error: `Sorry, something went wrong. Please try again.`
+- On image error: `Sorry, I could not process that image. Try a smaller file or a JPEG/PNG.`
+
+### Template gallery (`TemplateGallery.tsx`)
+
+- Loading title: `Generating your portfolio website...`
+- Loading body: `The AI is building a fully styled, responsive website from your resume. This can take 30–60 seconds.`
+- Page title: `Choose a Style`
+- Page subtitle: `Select a template style and our AI will generate a custom portfolio website from your resume.`
+- Primary button: `Generate Website`
+- Generic generation error: `Failed to generate website. Please try again.`
+
+### Resume textarea placeholder (`ResumeUpload.tsx`)
+
+Multiline placeholder (abbreviated in UI as one block):
+
+```
+Paste your resume content here...
+
+Example:
+John Doe
+Software Engineer
+john@example.com
+
+Experience:
+- Senior Developer at Acme Corp (2020-2024)
+  Built scalable web applications...
+
+Skills: React, TypeScript, Node.js, Python
+```
 
 ---
 
-## UI Copy (not sent to Workers AI)
+## License
 
-**Chat quick suggestions** (`src/components/ChatInterface.tsx`): e.g. “Make the design more creative and unique”, “Upload a profile photo”, etc. — these populate the text field only; they are not system prompts.
+MIT (same as the project).

@@ -6,6 +6,12 @@
 
 cf-ai lets users paste or upload their resume, choose a design template, and then use a conversational AI assistant to generate and iteratively customize a personal portfolio website. The AI parses the resume into structured data, generates a complete HTML/CSS website, and allows real-time refinement through natural language chat.
 
+## Potential upgrades and caveats
+
+As of right now the app is fully functioning however the integrated AI isnt the best at making the website look good on the first try. Im sure that with a slightly more powerful AI it could be a little bit better. However, after iterating with the AI a bit the end website can look pretty nice.
+
+An upgrade that I would have loved to add is a way to be able to buy a domain for the website so that the website that I made can give the user a full website instead of just the base design. I felt adding that feature was out of the scope for this project.
+
 ## Architecture & Cloudflare Components
 
 | Component | Cloudflare Service | Purpose |
@@ -25,18 +31,32 @@ cf-ai lets users paste or upload their resume, choose a design template, and the
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/) v18+
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) (`npm install -g wrangler`)
-- A [Cloudflare account](https://dash.cloudflare.com/sign-up) (free tier works)
+- [Node.js](https://nodejs.org/) v18+ (includes `npm`)
+- A [Cloudflare account](https://dash.cloudflare.com/sign-up) (free tier works; Workers AI must be available on the account you use)
+- **Optional:** [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) installed globally (`npm install -g wrangler`). After `npm install`, project scripts use the **local** Wrangler in `node_modules`, so a global install is not required.
+
+## Giving this to someone else (employers, graders, teammates)
+
+**Easiest option — hosted demo:** If the app is already deployed to Cloudflare Pages, share the **`*.pages.dev` URL** (or custom domain). Reviewers can try the full app in a browser with no install and no Cloudflare login.
+
+**If they need to run it locally:**
+
+1. **`wrangler login` is per person.** It opens Cloudflare’s browser sign-in. Whoever runs it uses **their own** Cloudflare account (or creates one). They are **not** logging in with the author’s password, and nothing in the repo should contain anyone’s Cloudflare password.
+2. **KV namespace IDs in `wrangler.toml` belong to a specific Cloudflare account.** IDs checked into the repo work only for that account. Anyone else should create **their own** KV namespaces (see [Setup → Create a KV namespace](#4-create-a-kv-namespace)) and paste **their** `id` and `preview_id` into `wrangler.toml`, or run `npm run preview:remote` after they have deployed and configured bindings in the dashboard (see **KV during local dev** under [Running Locally](#running-locally)).
+3. **Workers AI** runs through Cloudflare; local `wrangler pages dev` still uses the **logged-in account** for AI (usage limits / billing may apply on that account).
 
 ## Setup
 
-### 1. Clone the repository
+### 1. Get the code
+
+**Git:**
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/cf-ai.git
 cd cf-ai
 ```
+
+**Or** unzip/copy the project folder and open a terminal **inside** that folder (the directory that contains `package.json` and `wrangler.toml`).
 
 ### 2. Install dependencies
 
@@ -44,18 +64,24 @@ cd cf-ai
 npm install
 ```
 
+Always run this **before** `npm run build` or `npm run dev`. If you skip it, you may see **`vite` is not recognized** (or similar) because devDependencies are missing.
+
 ### 3. Authenticate with Cloudflare
 
 ```bash
-wrangler login
+npx wrangler login
 ```
+
+Use the account that should own KV and Workers AI for this machine. (Global `wrangler login` also works if you installed Wrangler globally.)
 
 ### 4. Create a KV namespace
 
 ```bash
-wrangler kv:namespace create RESUME_KV
-wrangler kv:namespace create RESUME_KV --preview
+npx wrangler kv namespace create RESUME_KV
+npx wrangler kv namespace create RESUME_KV --preview
 ```
+
+> **Older Wrangler (v3.x):** if `kv namespace` is not found, try `npx wrangler kv:namespace create RESUME_KV` (and the same with `--preview`). Prefer `npx wrangler` from this repo so the CLI matches `package.json`.
 
 Copy the IDs from the output and update `wrangler.toml`:
 
@@ -83,6 +109,10 @@ Text is extracted **in the browser** before anything is sent to Workers AI.
 Scanned PDFs (image-only) usually yield little or no text unless OCR’d elsewhere.
 
 ## Running Locally
+
+**Command order:** `npm install` → (optional) `npx wrangler login` and KV IDs in `wrangler.toml` → `npm run build` → `npm run preview`. The preview server serves the **`dist`** folder from the build; if the build failed, `dist` may be missing and the app URL will **404**.
+
+**Windows PowerShell:** On older PowerShell (5.x), chaining with `&&` can fail. Run each command on its own line, or use `;` instead of `&&` (e.g. `npm install; npm run build`).
 
 ### Frontend only (no Pages Functions)
 
@@ -133,10 +163,10 @@ Workers AI runs **only** inside **Pages Functions** (`functions/api/*`), not ins
    ```
    In the Cloudflare dashboard (**Workers & Pages** → your project → **Settings** → **Bindings**), if you add Workers AI manually, the variable name must be **`AI`** (same as in code).
 
-2. **KV (recommended)** — Replace `PLACEHOLDER_KV_ID` / `PLACEHOLDER_PREVIEW_KV_ID` in `wrangler.toml` with IDs from:
+2. **KV (recommended)** — Replace placeholder or another-account KV IDs in `wrangler.toml` with IDs from:
    ```bash
-   wrangler kv:namespace create RESUME_KV
-   wrangler kv:namespace create RESUME_KV --preview
+   npx wrangler kv namespace create RESUME_KV
+   npx wrangler kv namespace create RESUME_KV --preview
    ```
    Session writes use `kvPutSafe`: if KV is missing or misconfigured, **parse / generate / chat still return 200**; you will see `[kv]` warnings in logs and lose server-side session persistence until KV is fixed.
 
@@ -164,6 +194,27 @@ npm run deploy
 This builds the React frontend and deploys static assets plus `functions/` to Cloudflare Pages. Bindings in `wrangler.toml` (`[ai]`, `[[kv_namespaces]]`) are applied when you deploy with Wrangler from this directory.
 
 If the project was created only in the dashboard, open **Settings → Bindings** and ensure **Workers AI** (`AI`) and **KV** (`RESUME_KV`) match `wrangler.toml`, then trigger a new deployment.
+
+**Sharing a live build:** After the first successful deploy, you can put the production **`*.pages.dev`** link in your README, résumé, or portfolio so others can evaluate the app without cloning the repo.
+
+## Troubleshooting
+
+| Symptom | Likely cause | What to do |
+|--------|----------------|------------|
+| `'vite' is not recognized` (Windows) or similar | Dependencies not installed | From the project root (folder with `package.json`), run `npm install`, then `npm run build` again. |
+| `GET / 404` on `http://127.0.0.1:8788` | No successful build, or empty `dist/` | Fix the build error, then run `npm run build` before `npm run preview`. |
+| API errors while using `localhost:5173` only | Vite proxies `/api` to port **8788** | Start `npm run preview` in another terminal so the Pages Functions server is listening on 8788. |
+| KV / session weirdness for a new machine | `wrangler.toml` still has another account’s namespace IDs | Create new namespaces with `npx wrangler kv namespace create ...`, update `wrangler.toml`, or use `npm run preview:remote` after dashboard bindings exist. |
+| `wrangler` command not found | No global install | Use `npx wrangler` (after `npm install`) or run `npm run preview` / `npm run deploy`, which invoke Wrangler via npm scripts. |
+
+## Optional environment variables (Vite)
+
+Add a `.env` or `.env.local` file next to `package.json` if you need to override client-side defaults. Only names starting with `VITE_` are exposed to the browser. Restart `npm run dev` after you change these (rebuild for production).
+
+| Variable | Values | Purpose |
+|----------|--------|---------|
+| `VITE_CF_AI_WORKER_URL` | URL string | Overrides the default external HTML-generation Worker URL (see **Workers AI** checklist item 5). |
+| `VITE_USE_PAGES_GENERATE_ONLY` | `true` | Use **only** `POST /api/generate` on Pages Functions; do not call the external Worker. |
 
 ## Project Structure
 
