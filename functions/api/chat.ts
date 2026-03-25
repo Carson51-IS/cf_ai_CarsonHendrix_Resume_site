@@ -1,3 +1,6 @@
+import { aiOutputToString } from '../utils/aiOutputToString';
+import { kvPutSafe } from '../utils/kvPutSafe';
+
 interface Env {
   AI: Ai;
   RESUME_KV: KVNamespace;
@@ -8,7 +11,7 @@ interface ChatMessage {
   content: string;
 }
 
-const SYSTEM_PROMPT = `You are an expert web developer assistant helping a user customize their portfolio website through conversation.
+const SYSTEM_PROMPT = `You are an expert web developer assistant helping a user customize their portfolio website through natural conversation.
 
 The user will describe changes they want. You must:
 1. Apply the requested changes to the current HTML
@@ -20,13 +23,26 @@ EXPLANATION: [1-2 sentence description of what you changed]
 [Complete updated HTML document starting with <!DOCTYPE html>]
 ---END---
 
-RULES:
+ABSOLUTE RULES:
 - Always return the FULL HTML document, not just a snippet
 - Keep all existing content unless the user explicitly asks to remove it
+- NEVER add Lorem ipsum, placeholder text, or filler content — use only real data from the existing HTML
 - Maintain responsive design and accessibility
 - All CSS must remain inline in <style> tags
-- Preserve the overall structure unless asked to change it
-- Be creative and make the changes look polished`;
+- Be creative and make changes look polished and professional
+
+IMAGE HANDLING:
+- The user may say "add my profile photo" or "here is an image for project X"
+- When the user provides an image (as a base64 data URL or a URL), replace the relevant placeholder element (data-img-slot="profile", data-img-slot="project-0", etc.) with an <img> tag using their provided source
+- If they say "add an image" without specifying where, ask which section (profile, a specific project, or background)
+- Style images responsively (max-width: 100%, object-fit: cover, appropriate border-radius)
+- Profile images should be circular (border-radius: 50%)
+- Project images should be rectangular with slight rounding
+
+WHEN THE USER ASKS FOR DESIGN CHANGES:
+- Be bold and creative — don't just change a color, reimagine the section
+- If they say "make it better", genuinely improve visual design, spacing, and polish
+- Suggest related improvements (e.g., "I changed the colors — want me to also update the hover effects to match?")`;
 
 export const onRequestPost: PagesFunction<Env> = async (context) => {
   try {
@@ -65,7 +81,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       },
     );
 
-    const content = aiResponse.response ?? '';
+    const content = aiOutputToString(aiResponse);
 
     let explanation = '';
     let html = body.currentHtml;
@@ -98,13 +114,15 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     ];
 
     await Promise.all([
-      context.env.RESUME_KV.put(
+      kvPutSafe(
+        context.env.RESUME_KV,
         `session:${body.sessionId}:chat`,
         JSON.stringify(updatedHistory),
         { expirationTtl: 86400 },
       ),
       html !== body.currentHtml
-        ? context.env.RESUME_KV.put(
+        ? kvPutSafe(
+            context.env.RESUME_KV,
             `session:${body.sessionId}:html`,
             html,
             { expirationTtl: 86400 },

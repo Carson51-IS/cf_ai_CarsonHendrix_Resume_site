@@ -1,38 +1,93 @@
+import { useState, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { templates } from '../templates';
 import { Check, ArrowRight, Loader2, AlertCircle } from 'lucide-react';
+import { readJsonOrThrow } from '../utils/apiFetch';
+import { getExternalGenerateWorkerUrl } from '../config/externalWorker';
+import type { AppState } from '../types';
+
+async function generateViaPagesApi(
+  state: AppState,
+  stylePrompt: string | undefined,
+): Promise<string> {
+  const res = await fetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      resumeData: state.resumeData,
+      templateId: state.selectedTemplate,
+      stylePrompt,
+      sessionId: state.sessionId,
+    }),
+  });
+  const data = await readJsonOrThrow<{ html?: string; error?: string }>(res);
+  if (!data.html) throw new Error(data.error || 'Failed to generate website');
+  return data.html;
+}
+
+/** Matches standalone Worker: POST JSON { input } → { html }. */
+async function generateViaExternalWorker(
+  workerUrl: string,
+  input: string,
+): Promise<string> {
+  const res = await fetch(workerUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ input }),
+  });
+  const data = (await res.json()) as { html?: string; error?: string };
+  if (!res.ok) {
+    throw new Error(
+      typeof data.error === 'string' ? data.error : `Worker HTTP ${res.status}`,
+    );
+  }
+  if (!data.html || typeof data.html !== 'string') {
+    throw new Error(data.error || 'Worker returned no html');
+  }
+  return data.html;
+}
 
 export function TemplateGallery() {
   const { state, dispatch } = useApp();
+  const [generating, setGenerating] = useState(false);
+  const busyRef = useRef(false);
 
   const handleGenerate = async () => {
-    if (!state.selectedTemplate) return;
+    if (!state.selectedTemplate || busyRef.current) return;
+    busyRef.current = true;
+    setGenerating(true);
     dispatch({ type: 'SET_LOADING', payload: true });
     dispatch({ type: 'SET_ERROR', payload: null });
 
     const template = templates.find((t) => t.id === state.selectedTemplate);
+    const workerUrl = getExternalGenerateWorkerUrl();
+
+    const inputPayload = [
+      state.resumeText.trim() ||
+        JSON.stringify(state.resumeData ?? {}, null, 2),
+      '',
+      'Selected template style (follow closely):',
+      template?.stylePrompt ?? '',
+    ].join('\n');
 
     try {
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          resumeData: state.resumeData,
-          templateId: state.selectedTemplate,
-          stylePrompt: template?.stylePrompt,
-          sessionId: state.sessionId,
-        }),
-      });
-
-      if (!res.ok) throw new Error(`Server error: ${res.status}`);
-      const data = await res.json();
-
-      if (data.html) {
-        dispatch({ type: 'SET_GENERATED_HTML', payload: data.html });
-        dispatch({ type: 'SET_STEP', payload: 'customize' });
-      } else {
-        throw new Error(data.error || 'Failed to generate website');
+      let html: string;
+      try {
+        html = await generateViaPagesApi(state, template?.stylePrompt);
+      } catch (pagesErr) {
+        if (workerUrl) {
+          console.warn(
+            'Pages /api/generate failed, falling back to external Worker:',
+            pagesErr,
+          );
+          html = await generateViaExternalWorker(workerUrl, inputPayload);
+        } else {
+          throw pagesErr;
+        }
       }
+
+      dispatch({ type: 'SET_GENERATED_HTML', payload: html });
+      dispatch({ type: 'SET_STEP', payload: 'customize' });
     } catch (err) {
       dispatch({
         type: 'SET_ERROR',
@@ -43,8 +98,28 @@ export function TemplateGallery() {
       });
     } finally {
       dispatch({ type: 'SET_LOADING', payload: false });
+      setGenerating(false);
+      busyRef.current = false;
     }
   };
+
+  if (generating) {
+    return (
+      <div className="max-w-5xl mx-auto flex flex-col items-center justify-center py-24 animate-fadeIn">
+        <Loader2 className="w-14 h-14 text-brand-500 animate-spin mb-5" />
+        <p className="text-xl font-semibold text-gray-800">
+          Generating your portfolio website...
+        </p>
+        <p className="text-sm text-gray-500 mt-2 max-w-md text-center">
+          The AI is building a fully styled, responsive website from your resume.
+          This can take 30–60 seconds.
+        </p>
+        <div className="mt-6 w-72 h-2 bg-gray-200 rounded-full overflow-hidden">
+          <div className="h-full bg-gradient-to-r from-brand-400 to-brand-600 rounded-full animate-[loading_2s_ease-in-out_infinite] w-2/3" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-5xl mx-auto animate-fadeIn">
@@ -77,7 +152,6 @@ export function TemplateGallery() {
                 className="h-40 p-5 relative overflow-hidden"
                 style={{ backgroundColor: template.previewColors.bg }}
               >
-                {/* Mini layout preview */}
                 <div className="space-y-2">
                   <div
                     className="h-2.5 w-20 rounded-full"
@@ -129,7 +203,6 @@ export function TemplateGallery() {
                   </div>
                 </div>
 
-                {/* Selected overlay */}
                 {isSelected && (
                   <div className="absolute inset-0 bg-brand-500/10 flex items-center justify-center">
                     <div className="w-8 h-8 bg-brand-500 rounded-full flex items-center justify-center shadow-lg">
@@ -139,7 +212,6 @@ export function TemplateGallery() {
                 )}
               </div>
 
-              {/* Info */}
               <div className="p-4 bg-white">
                 <h3 className="font-semibold text-gray-900 text-sm">
                   {template.name}
@@ -162,20 +234,11 @@ export function TemplateGallery() {
 
       <button
         onClick={handleGenerate}
-        disabled={!state.selectedTemplate || state.isLoading}
+        disabled={!state.selectedTemplate}
         className="mt-8 w-full flex items-center justify-center gap-2 px-6 py-3.5 bg-brand-600 text-white rounded-xl font-medium hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.99]"
       >
-        {state.isLoading ? (
-          <>
-            <Loader2 className="w-5 h-5 animate-spin" />
-            Generating Your Website...
-          </>
-        ) : (
-          <>
-            Generate Website
-            <ArrowRight className="w-5 h-5" />
-          </>
-        )}
+        Generate Website
+        <ArrowRight className="w-5 h-5" />
       </button>
     </div>
   );

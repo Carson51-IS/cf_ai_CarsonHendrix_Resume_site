@@ -1,13 +1,15 @@
 import { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { Send, Loader2, Bot, User } from 'lucide-react';
+import { Send, Loader2, Bot, User, ImagePlus } from 'lucide-react';
+import { readJsonOrThrow } from '../utils/apiFetch';
 
 const SUGGESTIONS = [
-  'Change the color scheme to blue',
-  'Make the hero section larger',
-  'Add a contact form section',
-  'Make it more minimalist',
-  'Add hover animations to cards',
+  'Make the design more creative and unique',
+  'Change the color scheme to blue and teal',
+  'Make the hero section more impactful',
+  'Add hover animations to all cards',
+  'Upload a profile photo',
+  'Redesign the skills section to look more visual',
 ];
 
 export function ChatInterface() {
@@ -15,6 +17,7 @@ export function ChatInterface() {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -43,8 +46,11 @@ export function ChatInterface() {
         }),
       });
 
-      if (!res.ok) throw new Error(`Server error: ${res.status}`);
-      const data = await res.json();
+      const data = await readJsonOrThrow<{
+        explanation?: string;
+        html?: string;
+        error?: string;
+      }>(res);
 
       dispatch({
         type: 'ADD_CHAT_MESSAGE',
@@ -76,6 +82,64 @@ export function ChatInterface() {
       e.preventDefault();
       handleSend();
     }
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const slotHint = input.trim() || 'Use this image where it fits best (profile photo or a project)';
+      const message = `Here is an image I want to add to my website. ${slotHint}\n\n[IMAGE_DATA_URL]: ${dataUrl}`;
+      setInput('');
+      dispatch({
+        type: 'ADD_CHAT_MESSAGE',
+        payload: { role: 'user', content: `📷 Image uploaded: ${slotHint}` },
+      });
+      dispatch({ type: 'SET_LOADING', payload: true });
+
+      fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          currentHtml: state.generatedHtml,
+          chatHistory: state.chatHistory,
+          sessionId: state.sessionId,
+        }),
+      })
+        .then((res) =>
+          readJsonOrThrow<{ explanation?: string; html?: string; error?: string }>(res),
+        )
+        .then((data) => {
+          dispatch({
+            type: 'ADD_CHAT_MESSAGE',
+            payload: {
+              role: 'assistant',
+              content: data.explanation || 'Image added! Check the preview.',
+            },
+          });
+          if (data.html) {
+            dispatch({ type: 'SET_GENERATED_HTML', payload: data.html });
+          }
+        })
+        .catch(() => {
+          dispatch({
+            type: 'ADD_CHAT_MESSAGE',
+            payload: {
+              role: 'assistant',
+              content: 'Sorry, I could not process that image. Try a smaller file or a JPEG/PNG.',
+            },
+          });
+        })
+        .finally(() => {
+          dispatch({ type: 'SET_LOADING', payload: false });
+        });
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   return (
@@ -165,10 +229,25 @@ export function ChatInterface() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Describe a change..."
+            placeholder="Describe a change or type where to place an image..."
             rows={1}
             className="flex-1 px-3.5 py-2 border border-gray-200 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-sm max-h-24"
           />
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleImageUpload}
+            className="hidden"
+          />
+          <button
+            onClick={() => imageInputRef.current?.click()}
+            disabled={state.isLoading}
+            className="p-2.5 text-gray-500 hover:text-brand-600 hover:bg-brand-50 rounded-xl disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0 border border-gray-200"
+            title="Upload an image (profile photo, project screenshot, etc.)"
+          >
+            <ImagePlus className="w-4 h-4" />
+          </button>
           <button
             onClick={handleSend}
             disabled={!input.trim() || state.isLoading}

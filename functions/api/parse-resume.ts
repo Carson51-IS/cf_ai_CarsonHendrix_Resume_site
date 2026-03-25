@@ -1,3 +1,6 @@
+import { aiOutputToString } from '../utils/aiOutputToString';
+import { kvPutSafe } from '../utils/kvPutSafe';
+
 interface Env {
   AI: Ai;
   RESUME_KV: KVNamespace;
@@ -73,7 +76,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       },
     );
 
-    const content = aiResponse.response ?? '';
+    const content = aiOutputToString(aiResponse);
 
     // Extract JSON from the response — handle markdown fences or raw JSON
     let jsonStr = content;
@@ -87,8 +90,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 
     const resumeData = JSON.parse(jsonStr);
 
-    // Persist to KV for later steps
-    await context.env.RESUME_KV.put(
+    await kvPutSafe(
+      context.env.RESUME_KV,
       `session:${body.sessionId}:resume`,
       JSON.stringify(resumeData),
       { expirationTtl: 86400 },
@@ -97,6 +100,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     return Response.json({ resumeData });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[parse-resume]', message);
     return Response.json(
       { error: `Failed to parse resume: ${message}` },
       { status: 500 },

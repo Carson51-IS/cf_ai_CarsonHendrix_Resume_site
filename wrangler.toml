@@ -1,4 +1,4 @@
-name = "cf-ai-resume-site"
+name = "cf-ai"
 compatibility_date = "2024-12-30"
 pages_build_output_dir = "./dist"
 
@@ -7,5 +7,5 @@ binding = "AI"
 
 [[kv_namespaces]]
 binding = "RESUME_KV"
-id = "PLACEHOLDER_KV_ID"
-preview_id = "PLACEHOLDER_PREVIEW_KV_ID"
+id = "07b8b14f137348c8afa2ca70ec890109"
+preview_id = "fe583ad1505d4ce58842c95bc6d0bd3c"

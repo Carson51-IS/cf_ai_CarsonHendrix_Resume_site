@@ -14,7 +14,7 @@ type Action =
   | { type: 'RESET' };
 
 function getOrCreateSessionId(): string {
-  const key = 'resumeforge_session_id';
+  const key = 'cf_ai_session_id';
   const stored = localStorage.getItem(key);
   if (stored) return stored;
   const id = crypto.randomUUID();
@@ -55,7 +55,7 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_ERROR':
       return { ...state, error: action.payload, isLoading: false };
     case 'RESET':
-      localStorage.removeItem('resumeforge_session_id');
+      localStorage.removeItem('cf_ai_session_id');
       return { ...initialState, sessionId: crypto.randomUUID() };
     default:
       return state;

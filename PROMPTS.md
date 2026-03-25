@@ -1,10 +1,10 @@
 # AI Prompts Used
 
-This document catalogs all AI prompts used during the development of ResumeForge AI, as required by the Cloudflare assignment guidelines.
+This document catalogs all AI prompts used during the development of **cf-ai**, as required by the Cloudflare assignment guidelines.
 
 ## Development Prompts (Cursor AI)
 
-### Initial Project Scaffold
+### Initial Project Scaffold (cf-ai)
 > I want a webapp that will accept a users resume, give the user example templates or allow the user to make their own templates to turn their resume into a website that can display their projects personal accounts or whatever else they want on their website. We will use a Cloudflare worker AI to help build the website and iterate with the client. Please build the framework and we can iterate from there.
 
 ---
